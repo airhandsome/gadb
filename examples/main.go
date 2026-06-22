@@ -1,10 +1,11 @@
 package main
 
 import (
-	"github.com/electricbubble/gadb"
 	"log"
 	"os"
 	"strings"
+
+	"github.com/airhandsome/gadb"
 )
 
 func main() {

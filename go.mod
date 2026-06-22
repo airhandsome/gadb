@@ -1,3 +1,3 @@
-module github.com/electricbubble/gadb
+module github.com/airhandsome/gadb
 
 go 1.15

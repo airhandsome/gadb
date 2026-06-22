@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"strings"
 	"time"
@@ -122,10 +123,19 @@ func (d Device) DevicePath() (string, error) {
 }
 
 func (d Device) Forward(localPort, remotePort int, noRebind ...bool) (err error) {
-	command := ""
-	local := fmt.Sprintf("tcp:%d", localPort)
-	remote := fmt.Sprintf("tcp:%d", remotePort)
+	return d.ForwardWithRemote(localPort, fmt.Sprintf("tcp:%d", remotePort), noRebind...)
+}
 
+// ForwardWithRemote forwards a local TCP port to an arbitrary remote socket spec
+// on the device, for example "localabstract:scrcpy_xxx", "localreserved:...",
+// "localfilesystem:...", "tcp:5555", "jdwp:<pid>" or "dev:/dev/...".
+//
+// The plain Forward only targets tcp->tcp; scrcpy publishes its server on a
+// localabstract socket, which is why this generic variant is required.
+func (d Device) ForwardWithRemote(localPort int, remote string, noRebind ...bool) (err error) {
+	local := fmt.Sprintf("tcp:%d", localPort)
+
+	var command string
 	if len(noRebind) != 0 && noRebind[0] {
 		command = fmt.Sprintf("host-serial:%s:forward:norebind:%s;%s", d.serial, local, remote)
 	} else {
@@ -172,6 +182,39 @@ func (d Device) RunShellCommandWithBytes(cmd string, args ...string) ([]byte, er
 	}
 	raw, err := d.executeCommand(fmt.Sprintf("shell:%s", cmd))
 	return raw, err
+}
+
+// OpenShell starts a shell command and returns the live ADB connection without
+// reading it to completion. The process keeps running until the returned conn is
+// closed (which terminates the process) or the process exits on its own (a read
+// then returns io.EOF). Merged stdout/stderr can be read from the conn.
+//
+// Unlike RunShellCommand, which blocks until the command finishes, OpenShell is
+// meant for long-lived processes such as the scrcpy server (app_process): the
+// caller holds the conn to keep the process alive and closes it to stop it.
+func (d Device) OpenShell(cmd string, args ...string) (conn net.Conn, err error) {
+	if len(args) > 0 {
+		cmd = fmt.Sprintf("%s %s", cmd, strings.Join(args, " "))
+	}
+	if strings.TrimSpace(cmd) == "" {
+		return nil, errors.New("adb shell: command cannot be empty")
+	}
+
+	var tp transport
+	if tp, err = d.createDeviceTransport(); err != nil {
+		return nil, err
+	}
+
+	if err = tp.Send("shell:" + cmd); err != nil {
+		_ = tp.Close()
+		return nil, err
+	}
+	if err = tp.VerifyResponse(); err != nil {
+		_ = tp.Close()
+		return nil, err
+	}
+
+	return tp.sock, nil
 }
 
 func (d Device) EnableAdbOverTCP(port ...int) (err error) {
